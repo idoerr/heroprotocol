@@ -41,13 +41,13 @@ class EventLogger:
             self._event_stats[event['_event']] = stat
         # write structure
         if args.json:
-            s = json.dumps(event, encoding="ISO-8859-1")
+            s = json.dumps(event)
             print(s)
         else:
             pprint.pprint(event, stream=output)
 
     def log_stats(self, output):
-        for name, stat in sorted(self._event_stats.iteritems(), key=lambda x: x[1][1]):
+        for name, stat in sorted(self._event_stats.items(), key=lambda x: x[1][1]):
             print >> output, '"%s", %d, %d,' % (name, stat[0], stat[1] / 8)
 
 

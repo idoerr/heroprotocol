@@ -32,6 +32,7 @@ class CorruptedError(Exception):
 class BitPackedBuffer:
     def __init__(self, contents, endian='big'):
         self._data = contents or []
+        self._datalen = len(self._data)
         self._used = 0
         self._next = None
         self._nextbits = 0
@@ -40,13 +41,15 @@ class BitPackedBuffer:
     def __str__(self):
         return 'buffer(%02x/%d,[%d]=%s)' % (
             self._nextbits and self._next or 0, self._nextbits,
-            self._used, '%02x' % (ord(self._data[self._used]),) if (self._used < len(self._data)) else '--')
+            self._used, '%02x' % (self._data[self._used],) if (self._used < len(self._data)) else '--')
 
     def done(self):
-        return self._nextbits == 0 and self._used >= len(self._data)
+        #return self._nextbits == 0 and self._used >= len(self._data)
+        return self._nextbits == 0 and self._used >= self._datalen
 
     def used_bits(self):
-        return self._used * 8 - self._nextbits
+        #return self._used * 8 - self._nextbits
+        return (self._used << 3) - self._nextbits
 
     def byte_align(self):
         self._nextbits = 0
@@ -61,12 +64,12 @@ class BitPackedBuffer:
 
     def read_bits(self, bits):
         result = 0
-        resultbits = 0
-        while resultbits != bits:
+        resultbits = bits
+        while resultbits > 0:
             if self._nextbits == 0:
                 if self.done():
                     raise TruncatedError(self)
-                self._next = ord(self._data[self._used])
+                self._next = self._data[self._used]
                 self._used += 1
                 self._nextbits = 8
             copybits = min(bits - resultbits, self._nextbits)
@@ -81,22 +84,26 @@ class BitPackedBuffer:
         return result
 
     def read_unaligned_bytes(self, bytes):
-        return ''.join([chr(self.read_bits(8)) for i in xrange(bytes)])
+        return bytearray(self.read_bits(8) for i in range(0,bytes))
 
 
 class BitPackedDecoder:
     def __init__(self, contents, typeinfos):
         self._buffer = BitPackedBuffer(contents)
         self._typeinfos = typeinfos
+        self._typeinfos_len = len(typeinfos)
+        self._typeinfos_lookup = []
+        for x in typeinfos:
+            self._typeinfos_lookup.append(getattr(self, x[0]))
 
     def __str__(self):
         return self._buffer.__str__()
 
     def instance(self, typeid):
-        if typeid >= len(self._typeinfos):
+        if typeid >= self._typeinfos_len:
             raise CorruptedError(self)
-        typeinfo = self._typeinfos[typeid]
-        return getattr(self, typeinfo[0])(*typeinfo[1])
+        #typeinfo = self._typeinfos[typeid]
+        return self._typeinfos_lookup[typeid](*self._typeinfos[typeid][1])
 
     def byte_align(self):
         self._buffer.byte_align()
@@ -109,7 +116,7 @@ class BitPackedDecoder:
 
     def _array(self, bounds, typeid):
         length = self._int(bounds)
-        return [self.instance(typeid) for i in xrange(length)]
+        return [self.instance(typeid) for i in range(0,length)]
 
     def _bitarray(self, bounds):
         length = self._int(bounds)
@@ -118,6 +125,10 @@ class BitPackedDecoder:
     def _blob(self, bounds):
         length = self._int(bounds)
         result = self._buffer.read_aligned_bytes(length)
+        try:
+            result = result.decode('utf-8')
+        except UnicodeDecodeError:
+            pass
         return result
 
     def _bool(self):
@@ -131,7 +142,8 @@ class BitPackedDecoder:
         return {field[0]: self.instance(field[1])}
 
     def _fourcc(self):
-        return self._buffer.read_unaligned_bytes(4)
+		# bug fix for hero mastery levels.  Bytes were decoding backwards.
+        return struct.pack('>I', self._buffer.read_bits(32)).decode('utf-8')
 
     def _int(self, bounds):
         return bounds[0] + self._buffer.read_bits(bounds[1])
@@ -206,7 +218,7 @@ class VersionedDecoder:
     def _array(self, bounds, typeid):
         self._expect_skip(0)
         length = self._vint()
-        return [self.instance(typeid) for i in xrange(length)]
+        return [self.instance(typeid) for i in range(0,length)]
 
     def _bitarray(self, bounds):
         self._expect_skip(1)
@@ -216,7 +228,12 @@ class VersionedDecoder:
     def _blob(self, bounds):
         self._expect_skip(2)
         length = self._vint()
-        return self._buffer.read_aligned_bytes(length)
+        result = self._buffer.read_aligned_bytes(length)
+        try:
+            result = result.decode('utf-8')
+        except UnicodeDecodeError:
+            pass
+        return result
 
     def _bool(self):
         self._expect_skip(6)
@@ -259,7 +276,7 @@ class VersionedDecoder:
         self._expect_skip(5)
         result = {}
         length = self._vint()
-        for i in xrange(length):
+        for i in range(0,length):
             tag = self._vint()
             field = next((f for f in fields if f[2] == tag), None)
             if field:
@@ -281,7 +298,7 @@ class VersionedDecoder:
         skip = self._buffer.read_bits(8)
         if skip == 0:  # array
             length = self._vint()
-            for i in xrange(length):
+            for i in range(0,length):
                 self._skip_instance()
         elif skip == 1:  # bitblob
             length = self._vint()
@@ -298,7 +315,7 @@ class VersionedDecoder:
                 self._skip_instance()
         elif skip == 5:  # struct
             length = self._vint()
-            for i in xrange(length):
+            for i in range(0,length):
                 tag = self._vint()
                 self._skip_instance()
         elif skip == 6:  # u8

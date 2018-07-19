@@ -6,7 +6,7 @@ mpyq is a Python library for reading MPQ (MoPaQ) archives.
 """
 
 import bz2
-import cStringIO
+import io
 import os
 import struct
 import zlib
@@ -131,10 +131,10 @@ class MPQArchive(object):
         magic = self.file.read(4)
         self.file.seek(0)
 
-        if magic == 'MPQ\x1a':
+        if magic == b'MPQ\x1a':
             header = read_mpq_header()
             header['offset'] = 0
-        elif magic == 'MPQ\x1b':
+        elif magic == b'MPQ\x1b':
             user_data_header = read_mpq_user_data_header()
             header = read_mpq_header(user_data_header['mpq_header_offset'])
             header['offset'] = user_data_header['mpq_header_offset']
@@ -180,7 +180,7 @@ class MPQArchive(object):
 
         def decompress(data):
             """Read the compression type and decompress file data."""
-            compression_type = ord(data[0])
+            compression_type = data[0]
             if compression_type == 0:
                 return data
             elif compression_type == 2:
@@ -219,7 +219,7 @@ class MPQArchive(object):
                     crc = False
                 positions = struct.unpack('<%dI' % (sectors + 1),
                                           file_data[:4*(sectors+1)])
-                result = cStringIO.StringIO()
+                result = io.BytesIO()
                 for i in range(len(positions) - (2 if crc else 1)):
                     sector = file_data[positions[i]:positions[i+1]]
                     if (block_entry.flags & MPQ_FILE_COMPRESS and
@@ -263,47 +263,47 @@ class MPQArchive(object):
             f.close()
 
     def print_headers(self):
-        print "MPQ archive header"
-        print "------------------"
-        for key, value in self.header.iteritems():
+        print("MPQ archive header")
+        print("------------------")
+        for key, value in self.header.items():
             if key == "user_data_header":
                 continue
-            print "{0:30} {1!r}".format(key, value)
+            print("{0:30} {1!r}".format(key, value))
         if self.header.get('user_data_header'):
-            print
-            print "MPQ user data header"
-            print "--------------------"
-            for key, value in self.header['user_data_header'].iteritems():
-                print "{0:30} {1!r}".format(key, value)
-        print
+            print()
+            print("MPQ user data header")
+            print("--------------------")
+            for key, value in self.header['user_data_header'].items():
+                print("{0:30} {1!r}".format(key, value))
+        print()
 
     def print_hash_table(self):
-        print "MPQ archive hash table"
-        print "----------------------"
-        print " Hash A   Hash B  Locl Plat BlockIdx"
+        print("MPQ archive hash table")
+        print("----------------------")
+        print(" Hash A   Hash B  Locl Plat BlockIdx")
         for entry in self.hash_table:
-            print '%08X %08X %04X %04X %08X' % entry
-        print
+            print('%08X %08X %04X %04X %08X' % entry)
+        print()
 
     def print_block_table(self):
-        print "MPQ archive block table"
-        print "-----------------------"
-        print " Offset  ArchSize RealSize  Flags"
+        print("MPQ archive block table")
+        print("-----------------------")
+        print(" Offset  ArchSize RealSize  Flags")
         for entry in self.block_table:
-            print '%08X %8d %8d %8X' % entry
-        print
+            print('%08X %8d %8d %8X' % entry)
+        print()
 
     def print_files(self):
         if self.files:
-            print "Files"
-            print "-----"
+            print("Files")
+            print("-----")
             width = max(len(name) for name in self.files) + 2
             for filename in self.files:
                 hash_entry = self.get_hash_table_entry(filename)
                 block_entry = self.block_table[hash_entry.block_table_index]
-                print "{0:{width}} {1:>8} bytes".format(filename,
+                print("{0:{width}} {1:>8} bytes".format(filename,
                                                         block_entry.size,
-                                                        width=width)
+                                                        width=width))
 
     def _hash(self, string, hash_type):
         """Hash a string using MPQ's hash function."""
@@ -316,8 +316,13 @@ class MPQArchive(object):
         seed1 = 0x7FED7FED
         seed2 = 0xEEEEEEEE
 
+        is_bytes = isinstance(string, bytes)
+
         for ch in string:
-            ch = ord(ch.upper())
+            if is_bytes:
+                ch = ord(chr(ch).upper())
+            else:
+                ch = ord(ch.upper())
             value = self.encryption_table[(hash_types[hash_type] << 8) + ch]
             seed1 = (value ^ (seed1 + seed2)) & 0xFFFFFFFF
             seed2 = ch + seed1 + seed2 + (seed2 << 5) + 3 & 0xFFFFFFFF
@@ -328,7 +333,7 @@ class MPQArchive(object):
         """Decrypt hash or block table or a sector."""
         seed1 = key
         seed2 = 0xEEEEEEEE
-        result = cStringIO.StringIO()
+        result = io.BytesIO()
 
         for i in range(len(data) // 4):
             seed2 += self.encryption_table[0x400 + (seed1 & 0xFF)]
@@ -341,10 +346,10 @@ class MPQArchive(object):
             seed2 = value + seed2 + (seed2 << 5) + 3 & 0xFFFFFFFF
 
             result.write(struct.pack("<I", value))
-
+        retval = result.getvalue()
         return result.getvalue()
 
-    def _prepare_encryption_table():
+    def _prepare_encryption_table(self=None):
         """Prepare encryption table for MPQ hash function."""
         seed = 0x00100001
         crypt_table = {}
