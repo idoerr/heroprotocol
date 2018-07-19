@@ -1,5 +1,7 @@
 # heroprotocol.py
 
+## This fork of the heroprotocol project is a port to python 3.  Also contains some bug fixes, and performance improvements.
+
 heroprotocol.py is a series of reference [Python](https://www.python.org/downloads/) scripts and standalone tool to decode Heroes of the Storm replay files into Python data structures.
 
 Currently heroprotocol can decode these structures and events:
