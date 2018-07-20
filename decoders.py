@@ -44,11 +44,11 @@ class BitPackedBuffer:
             self._used, '%02x' % (self._data[self._used],) if (self._used < len(self._data)) else '--')
 
     def done(self):
-        #return self._nextbits == 0 and self._used >= len(self._data)
+        # return self._nextbits == 0 and self._used >= len(self._data)
         return self._nextbits == 0 and self._used >= self._datalen
 
     def used_bits(self):
-        #return self._used * 8 - self._nextbits
+        # return self._used * 8 - self._nextbits
         return (self._used << 3) - self._nextbits
 
     def byte_align(self):
@@ -102,7 +102,7 @@ class BitPackedDecoder:
     def instance(self, typeid):
         if typeid >= self._typeinfos_len:
             raise CorruptedError(self)
-        #typeinfo = self._typeinfos[typeid]
+        # typeinfo = self._typeinfos[typeid]
         return self._typeinfos_lookup[typeid](*self._typeinfos[typeid][1])
 
     def byte_align(self):
@@ -142,7 +142,7 @@ class BitPackedDecoder:
         return {field[0]: self.instance(field[1])}
 
     def _fourcc(self):
-		# bug fix for hero mastery levels.  Bytes were decoding backwards.
+        #  bug fix for hero mastery levels.  Bytes were decoding backwards.
         return struct.pack('>I', self._buffer.read_bits(32)).decode('utf-8')
 
     def _int(self, bounds):
