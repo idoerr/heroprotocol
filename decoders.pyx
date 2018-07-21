@@ -20,7 +20,6 @@
 
 import struct
 
-
 class TruncatedError(Exception):
     pass
 
@@ -28,13 +27,19 @@ class TruncatedError(Exception):
 class CorruptedError(Exception):
     pass
 
+cdef class BitPackedBuffer:
+    cdef bytes _data
+    cdef int _datalen
+    cdef int _used
+    cdef unsigned char _next
+    cdef char _nextbits
+    cdef char _bigendian
 
-class BitPackedBuffer:
-    def __init__(self, contents, endian='big'):
+    def __init__(self, bytes contents, str endian='big'):
         self._data = contents or []
         self._datalen = len(self._data)
         self._used = 0
-        self._next = None
+        self._next = 0
         self._nextbits = 0
         self._bigendian = (endian == 'big')
 
@@ -43,18 +48,18 @@ class BitPackedBuffer:
             self._nextbits and self._next or 0, self._nextbits,
             self._used, '%02x' % (self._data[self._used],) if (self._used < len(self._data)) else '--')
 
-    def done(self):
+    cpdef int done(self):
         # return self._nextbits == 0 and self._used >= len(self._data)
         return self._nextbits == 0 and self._used >= self._datalen
 
-    def used_bits(self):
+    cpdef int used_bits(self):
         # return self._used * 8 - self._nextbits
         return (self._used << 3) - self._nextbits
 
-    def byte_align(self):
+    cpdef int byte_align(self):
         self._nextbits = 0
 
-    def read_aligned_bytes(self, bytes):
+    cpdef bytes read_aligned_bytes(self, bytes):
         self.byte_align()
         data = self._data[self._used:self._used + bytes]
         self._used += bytes
@@ -62,9 +67,11 @@ class BitPackedBuffer:
             raise TruncatedError(self)
         return data
 
-    def read_bits(self, bits):
-        result = 0
-        resultbits = bits
+    cpdef unsigned int read_bits(self, char bits):
+        cdef unsigned int result = 0
+        cdef char resultbits = bits
+        cdef char copybits
+        cdef unsigned char copy
         while resultbits > 0:
             if self._nextbits == 0:
                 if self.done():
@@ -85,13 +92,16 @@ class BitPackedBuffer:
             resultbits -= copybits
         return result
 
-
     def read_unaligned_bytes(self, bytes):
         return bytearray(self.read_bits(8) for i in range(0,bytes))
 
+cdef class BitPackedDecoder:
+    cdef BitPackedBuffer _buffer
+    cdef _typeinfos
+    cdef int _typeinfos_len
+    cdef _typeinfos_lookup
 
-class BitPackedDecoder:
-    def __init__(self, contents, typeinfos):
+    def __init__(self, bytes contents, typeinfos):
         self._buffer = BitPackedBuffer(contents)
         self._typeinfos = typeinfos
         self._typeinfos_len = len(typeinfos)
@@ -108,13 +118,13 @@ class BitPackedDecoder:
         # typeinfo = self._typeinfos[typeid]
         return self._typeinfos_lookup[typeid](*self._typeinfos[typeid][1])
 
-    def byte_align(self):
+    cpdef int byte_align(self):
         self._buffer.byte_align()
 
-    def done(self):
+    cpdef int done(self):
         return self._buffer.done()
 
-    def used_bits(self):
+    cpdef int used_bits(self):
         return self._buffer.used_bits()
 
     def _array(self, bounds, typeid):
@@ -179,11 +189,19 @@ class BitPackedDecoder:
                 result[field[0]] = self.instance(field[1])
         return result
 
+cdef class VersionedDecoder:
+    cdef BitPackedBuffer _buffer
+    cdef _typeinfos
+    cdef int _typeinfos_len
+    cdef _typeinfos_lookup
 
-class VersionedDecoder:
     def __init__(self, contents, typeinfos):
         self._buffer = BitPackedBuffer(contents)
         self._typeinfos = typeinfos
+        self._typeinfos_len = len(typeinfos)
+        self._typeinfos_lookup = []
+        for x in typeinfos:
+            self._typeinfos_lookup.append(getattr(self, x[0]))
 
     def __str__(self):
         return self._buffer.__str__()
@@ -191,8 +209,9 @@ class VersionedDecoder:
     def instance(self, typeid):
         if typeid >= len(self._typeinfos):
             raise CorruptedError(self)
-        typeinfo = self._typeinfos[typeid]
-        return getattr(self, typeinfo[0])(*typeinfo[1])
+        return self._typeinfos_lookup[typeid](*self._typeinfos[typeid][1])
+        #typeinfo = self._typeinfos[typeid]
+        #return getattr(self, typeinfo[0])(*typeinfo[1])
 
     def byte_align(self):
         self._buffer.byte_align()
@@ -207,7 +226,7 @@ class VersionedDecoder:
         if self._buffer.read_bits(8) != expected:
             raise CorruptedError(self)
 
-    def _vint(self):
+    cpdef unsigned int _vint(self):
         b = self._buffer.read_bits(8)
         negative = b & 1
         result = (b >> 1) & 0x3f
@@ -251,7 +270,7 @@ class VersionedDecoder:
         field = fields[tag]
         return {field[0]: self.instance(field[1])}
 
-    def _fourcc(self):
+    cpdef bytes _fourcc(self):
         self._expect_skip(7)
         return self._buffer.read_aligned_bytes(4)
 

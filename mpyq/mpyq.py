@@ -211,7 +211,7 @@ class MPQArchive(object):
                 # File consist of many sectors. They all need to be
                 # decompressed separately and united.
                 sector_size = 512 << self.header['sector_size_shift']
-                sectors = block_entry.size / sector_size + 1
+                sectors = int(block_entry.size / sector_size + 1)
                 if block_entry.flags & MPQ_FILE_SECTOR_CRC:
                     crc = True
                     sectors += 1

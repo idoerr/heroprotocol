@@ -4,6 +4,10 @@
 *.SC2Replay
 *.StormReplay
 
+decoders.c
+
 .gitignore
 
 .idea/
+build/
+parser_custom/
