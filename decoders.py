@@ -33,61 +33,89 @@ class BitPackedBuffer:
     def __init__(self, contents, endian='big'):
         self._data = contents or []
         self._datalen = len(self._data)
+        self._datagen = iter(self._data)
         self._used = 0
-        self._next = None
+        self._next = 0
         self._nextbits = 0
         self._bigendian = (endian == 'big')
 
     def __str__(self):
-        return 'buffer(%02x/%d,[%d]=%s)' % (
-            self._nextbits and self._next or 0, self._nextbits,
-            self._used, '%02x' % (self._data[self._used],) if (self._used < len(self._data)) else '--')
-
+        return 'buffer(%02x/%d)' % (self._next or 0, self._nextbits)
     def done(self):
         # return self._nextbits == 0 and self._used >= len(self._data)
-        return self._nextbits == 0 and self._used >= self._datalen
+        # NOTE:  this method is broken
+        if self._next is None:
+            return True
+
+        if self._nextbits == 0:
+            self._next = next(self._datagen, None)
+            self._nextbits = 8
+
+            return self._next is None
+        else:
+            return False
 
     def used_bits(self):
-        # return self._used * 8 - self._nextbits
-        return (self._used << 3) - self._nextbits
+        return 0
 
     def byte_align(self):
         self._nextbits = 0
 
-    def read_aligned_bytes(self, bytes):
+    def read_aligned_bytes(self, num_bytes):
         self.byte_align()
-        data = self._data[self._used:self._used + bytes]
-        self._used += bytes
-        if len(data) != bytes:
-            raise TruncatedError(self)
-        return data
+        return bytes(next(self._datagen) for i in range(0, num_bytes))
 
     def read_bits(self, bits):
+
+        # cache the class variables as locals to reduce pointer dereferences
+        _next = self._next
+        _nextbits = self._nextbits
+        _bigendian = self._bigendian
+        _datagen = self._datagen
+
         result = 0
-        resultbits = bits
-        while resultbits > 0:
-            if self._nextbits == 0:
-                if self.done():
-                    raise TruncatedError(self)
-                self._next = self._data[self._used]
-                self._used += 1
-                self._nextbits = 8
-            copybits = self._nextbits if resultbits > self._nextbits else resultbits
-            #copybits = min(resultbits, self._nextbits)
-            #copy = (self._next & ((1 << copybits) - 1))
-            copy = (self._next >> (8 - self._nextbits) & ((1 << copybits) - 1))
-            if self._bigendian:
-                result |= copy << (resultbits - copybits)
+        remaining_bits = bits # this is the number of bits remaining to be read.
+        read_bits = 0 # only increment this in little-endian mode
+
+        while True:
+            if _nextbits == 0:
+                _next = _datagen.__next__()
+                _nextbits = 8
+
+            if remaining_bits > _nextbits:
+                copy = _next
+                remaining_bits -= _nextbits
+
+                if _bigendian:
+                    result |= copy << remaining_bits
+                else:
+                    #print(little_endian_last_read_size - read_bits)
+                    result |= copy << read_bits
+                    read_bits += _nextbits
+                _nextbits = 0
             else:
-                result |= copy << bits - resultbits
-            #self._next >>= copybits
-            self._nextbits -= copybits
-            resultbits -= copybits
+                copy = _next & ((1 << remaining_bits) - 1) # we are creating a mask here by 1 << 3 == 1000 - 1 = 0111
+                _next = _next >> remaining_bits # we are removing the bits that we just used here.
+                _nextbits -= remaining_bits
+
+                if _bigendian:
+                    result |= copy
+                else:
+                    result |= copy << read_bits
+
+                break
+
+        self._next = _next
+        self._nextbits = _nextbits
+
         return result
 
-
-    def read_unaligned_bytes(self, bytes):
-        return bytearray(self.read_bits(8) for i in range(0,bytes))
+    def read_unaligned_bytes(self, num_bytes):
+        #read_bits is slow, so doing a trivial check to see if we are at a bytes boundary
+        if self._nextbits == 0:
+            return bytes(next(self._datagen) for i in range(0,num_bytes))
+        else:
+            return bytes(self.read_bits(8) for i in range(0,num_bytes))
 
 
 class BitPackedDecoder:
@@ -96,8 +124,10 @@ class BitPackedDecoder:
         self._typeinfos = typeinfos
         self._typeinfos_len = len(typeinfos)
         self._typeinfos_lookup = []
+        self._typeinfos_args = []
         for x in typeinfos:
             self._typeinfos_lookup.append(getattr(self, x[0]))
+            self._typeinfos_args.append(x[1])
 
     def __str__(self):
         return self._buffer.__str__()
@@ -106,7 +136,7 @@ class BitPackedDecoder:
         if typeid >= self._typeinfos_len:
             raise CorruptedError(self)
         # typeinfo = self._typeinfos[typeid]
-        return self._typeinfos_lookup[typeid](*self._typeinfos[typeid][1])
+        return self._typeinfos_lookup[typeid](*self._typeinfos_args[typeid])
 
     def byte_align(self):
         self._buffer.byte_align()
@@ -135,7 +165,7 @@ class BitPackedDecoder:
         return result
 
     def _bool(self):
-        return self._int((0, 1)) != 0
+        return self._buffer.read_bits(1) != 0
 
     def _choice(self, bounds, fields):
         tag = self._int(bounds)
