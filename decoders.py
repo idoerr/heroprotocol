@@ -67,6 +67,10 @@ class BitPackedBuffer:
 
     def read_bits(self, bits):
 
+        # Special case for when we aren't reading any bits
+        if bits == 0:
+            return 0
+
         # cache the class variables as locals to reduce pointer dereferences
         _next = self._next
         _nextbits = self._nextbits
@@ -119,24 +123,33 @@ class BitPackedBuffer:
 
 
 class BitPackedDecoder:
+
     def __init__(self, contents, typeinfos):
         self._buffer = BitPackedBuffer(contents)
-        self._typeinfos = typeinfos
-        self._typeinfos_len = len(typeinfos)
-        self._typeinfos_lookup = []
-        self._typeinfos_args = []
-        for x in typeinfos:
-            self._typeinfos_lookup.append(getattr(self, x[0]))
-            self._typeinfos_args.append(x[1])
+
+        self._typeinfo_functions = []
+        self._typeinfo_len = len(typeinfos)
+
+        # NOTE:  this class has been re-written to use closures.
+        # All of the named functionality now return a function, which when executed actually does the dirty work.
+        # instance functions the same as before.  If you want to get a reference to a given function, use _lookup
+        # ASSUMPTION:  structs & related only use previously declared functions
+        for funcName, args_array in typeinfos:
+            funcObj = getattr(self, funcName)(*args_array)
+            self._typeinfo_functions.append(funcObj)
 
     def __str__(self):
         return self._buffer.__str__()
 
+    def _lookup(self, typeid):
+        return self._typeinfo_functions[typeid]
+
     def instance(self, typeid):
-        if typeid >= self._typeinfos_len:
-            raise CorruptedError(self)
+        #if typeid >= self._typeinfo_len:
+        #    raise CorruptedError(self)
         # typeinfo = self._typeinfos[typeid]
-        return self._typeinfos_lookup[typeid](*self._typeinfos_args[typeid])
+        return self._typeinfo_functions[typeid]()
+        #return self._typeinfos_lookup[typeid](*self._typeinfos_args[typeid])
 
     def byte_align(self):
         self._buffer.byte_align()
@@ -148,67 +161,126 @@ class BitPackedDecoder:
         return self._buffer.used_bits()
 
     def _array(self, bounds, typeid):
-        length = self._int(bounds)
-        return [self.instance(typeid) for i in range(0,length)]
+        int_func = self._int(bounds)
+
+        def _array_closure():
+            length = int_func()
+            type_lookup = self._lookup(typeid)
+            return [type_lookup() for i in range(0,length)]
+
+        return _array_closure
 
     def _bitarray(self, bounds):
-        length = self._int(bounds)
-        return (length, self._buffer.read_bits(length))
+        int_func = self._int(bounds)
+
+        def _bitarray_closure():
+            length = int_func()
+            return (length, self._buffer.read_bits(length))
+        return _bitarray_closure
 
     def _blob(self, bounds):
-        length = self._int(bounds)
-        result = self._buffer.read_aligned_bytes(length)
-        try:
-            result = result.decode('utf-8')
-        except UnicodeDecodeError:
-            pass
-        return result
+        int_func = self._int(bounds)
+
+        def _blob_closure():
+            length = int_func()
+            result = self._buffer.read_aligned_bytes(length)
+            try:
+                result = result.decode('utf-8')
+            except UnicodeDecodeError:
+                pass
+            return result
+        return _blob_closure
 
     def _bool(self):
-        return self._buffer.read_bits(1) != 0
+        def _bool_closure():
+            return self._buffer.read_bits(1) != 0
+        return _bool_closure
 
     def _choice(self, bounds, fields):
-        tag = self._int(bounds)
-        if tag not in fields:
-            raise CorruptedError(self)
-        field = fields[tag]
-        return {field[0]: self.instance(field[1])}
+        tag_func = self._int(bounds)
+        field_lookup = {}
+
+        for index in fields:
+            name, typeid = fields[index]
+            field_lookup[index] = (name, self._lookup(typeid))
+
+        def _choice_closure():
+            tag = tag_func()
+            if tag not in fields:
+                raise CorruptedError(self)
+            field_name, field_func = field_lookup[tag]
+            return {field_name: field_func()}
+
+        return _choice_closure
 
     def _fourcc(self):
-        #  bug fix for hero mastery levels.  Bytes were decoding backwards.
-        return struct.pack('>I', self._buffer.read_bits(32)).decode('utf-8')
+        def _fourcc_closure():
+            #  bug fix for hero mastery levels.  Bytes were decoding backwards.
+            return struct.pack('>I', self._buffer.read_bits(32)).decode('utf-8')
+        return _fourcc_closure
 
     def _int(self, bounds):
-        return bounds[0] + self._buffer.read_bits(bounds[1])
+        _buffer = self._buffer
+        if bounds[0] == 0:
+            def _int0_closure():
+                return _buffer.read_bits(bounds[1])
+            return _int0_closure
+        else:
+            def _int_closure():
+                return bounds[0] + _buffer.read_bits(bounds[1])
+            return _int_closure
 
     def _null(self):
-        return None
+        def _null_closure():
+            return None
+        return _null_closure
 
     def _optional(self, typeid):
-        exists = self._bool()
-        return self.instance(typeid) if exists else None
+        bool_func = self._bool()
+        exec_func = self._lookup(typeid)
+
+        def _optional_closure():
+            exists = bool_func()
+            return exec_func() if exists else None
+        return _optional_closure
 
     def _real32(self):
-        return struct.unpack('>f', self._buffer.read_unaligned_bytes(4))
+        def _real32_closure():
+            return struct.unpack('>f', self._buffer.read_unaligned_bytes(4))
+        return _real32_closure
 
     def _real64(self):
-        return struct.unpack('>d', self._buffer.read_unaligned_bytes(8))
+        def _real64_closure():
+            return struct.unpack('>d', self._buffer.read_unaligned_bytes(8))
+        return _real64_closure
 
     def _struct(self, fields):
-        result = {}
-        for field in fields:
-            if field[0] == '__parent':
-                parent = self.instance(field[1])
-                if isinstance(parent, dict):
-                    result.update(parent)
-                elif len(fields) == 1:
-                    result = parent
-                else:
-                    result[field[0]] = parent
-            else:
-                result[field[0]] = self.instance(field[1])
-        return result
+        # Adding assumption that parent is the first field in the _struct, if it's there.
+        parent_func = None
 
+        fields_lookup = []
+
+        for name, typeid, index in fields:
+            field_func = self._lookup(typeid)
+            if name == '__parent':
+                parent_func = field_func
+            else:
+                fields_lookup.append( (name, field_func))
+
+        def _struct_closure():
+            result = {}
+            if parent_func is not None:
+                parent_result = parent_func()
+                if isinstance(parent_result, dict):
+                    result = parent_result
+                else:
+                    result['__parent'] = parent_result
+
+            for name, exec_func in fields_lookup:
+                result[name] = exec_func()
+            return result
+
+        return _struct_closure
 
 class VersionedDecoder:
     def __init__(self, contents, typeinfos):

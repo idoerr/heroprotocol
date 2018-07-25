@@ -47,7 +47,7 @@ class EventLogger:
 
     def log_stats(self, output):
         for name, stat in sorted(self._event_stats.items(), key=lambda x: x[1][1]):
-            print >> output, '"%s", %d, %d,' % (name, stat[0])
+            print(output, '"%s", %d, ' % (name, stat[0]))
 
 
 if __name__ == '__main__':
@@ -90,7 +90,7 @@ if __name__ == '__main__':
     try:
         protocol_functions.load_protocol(baseBuild)
     except:
-        print >> sys.stderr, 'Unsupported base build: %d' % baseBuild
+        print(sys.stderr, 'Unsupported base build: %d' % baseBuild)
         sys.exit(1)
 
     # Print protocol details
