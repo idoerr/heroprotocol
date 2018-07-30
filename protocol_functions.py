@@ -4,9 +4,11 @@ from decoders import *
 
 protocol = __import__('protocol29406')
 
+
 def load_protocol( build ):
     global protocol
     protocol = __import__('protocol%s' % build)
+
 
 def _varuint32_value(value):
     # Returns the numeric value from a SVarUint32 instance.

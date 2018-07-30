@@ -41,12 +41,12 @@ class BitPackedBuffer:
 
     def __str__(self):
         return 'buffer(%02x/%d)' % (self._next or 0, self._nextbits)
+
     def done(self):
-        # return self._nextbits == 0 and self._used >= len(self._data)
-        # NOTE:  this method is broken
         if self._next is None:
             return True
 
+        # if we're at the end of a byte, read a byte, and check again.
         if self._nextbits == 0:
             self._next = next(self._datagen, None)
             self._nextbits = 8
@@ -55,6 +55,7 @@ class BitPackedBuffer:
         else:
             return False
 
+    # Here for compatibility, currently does nothing as we're using an iterator
     def used_bits(self):
         return 0
 
@@ -86,27 +87,37 @@ class BitPackedBuffer:
                 _next = _datagen.__next__()
                 _nextbits = 8
 
+            # If we have to read more than the available bits in our _next, then just read all of the bits
+            # This works because partial reads of _next are destructive of the bits that are read.
+            # As a result, _next will never be greater than 2^_nextbits
             if remaining_bits > _nextbits:
-                copy = _next
+                copy = _next  # This copy is technically unnecessary, but it keeps the code consistent.
+
+                # By subtracting first, remaining_bits becomes the right-most position (big-endian).
                 remaining_bits -= _nextbits
 
                 if _bigendian:
+                    # Bits in _nextbits are always right-adjusted, so we left-shift the requisite number of bits
                     result |= copy << remaining_bits
                 else:
-                    #print(little_endian_last_read_size - read_bits)
+                    # We use read_bits here for little endian because the first byte is 0-adjusted,
+                    # second is 8-adjusted, etc.
+
                     result |= copy << read_bits
-                    read_bits += _nextbits
-                _nextbits = 0
+                    read_bits += _nextbits  # Append to read_bits after using it.  Order is important here.
+                _nextbits = 0  # We just read all of the bits, so we need to read another byte
             else:
-                copy = _next & ((1 << remaining_bits) - 1) # we are creating a mask here by 1 << 3 == 1000 - 1 = 0111
-                _next = _next >> remaining_bits # we are removing the bits that we just used here.
-                _nextbits -= remaining_bits
+                copy = _next & ((1 << remaining_bits) - 1)  # We are creating a mask here by 1 << 3 == 1000 - 1 = 0111
+                _next = _next >> remaining_bits  # We are removing the bits that we just used here.
+                _nextbits -= remaining_bits  # Keep track of the number of bits remaining.
 
                 if _bigendian:
+                    # No need to left adjust since last byte in big endian mode is right-adjusted.
                     result |= copy
                 else:
                     result |= copy << read_bits
 
+                # NOTE:  no need to adjust remaining_bits or read_bits since we're exiting
                 break
 
         self._next = _next
@@ -115,7 +126,7 @@ class BitPackedBuffer:
         return result
 
     def read_unaligned_bytes(self, num_bytes):
-        #read_bits is slow, so doing a trivial check to see if we are at a bytes boundary
+        # read_bits is slow, so doing a trivial check to see if we are at a bytes boundary
         if self._nextbits == 0:
             return bytes(next(self._datagen) for i in range(0,num_bytes))
         else:
